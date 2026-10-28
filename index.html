@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Teleprompter de Bolso</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b09">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prompter">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-512.png">
+<style>
+  /* Layout: one dark studio look, three screens.
+     Roteiros = list of saved scripts. Editor = script + global settings, start bar pinned at the bottom.
+     Leitura = full stage, mirrored text wrapper, reading line at 30%, control bar that never mirrors.
+     Everything is local: system fonts, no network, so it runs offline once installed. */
+  :root {
+    --ink: #0b0b09;
+    --panel: #171612;
+    --line: #2c2a23;
+    --fg: #ece8da;
+    --muted: #9c9684;
+    --accent: #fff6a3;       /* amarelo bem claro */
+    --danger: #ff8a7a;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --prompt: #fff6a3;       /* reading colors, set from settings */
+    --prompt-bg: #000000;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--ink);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  [hidden] { display: none !important; }
+  button, input, textarea, label { font-family: inherit; }
+  button { touch-action: manipulation; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .screen {
+    max-width: 720px;
+    margin: 0 auto;
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+  .head h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+  .head h1 span { color: var(--accent); }
+  .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  .count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .ghost {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 40px; padding: 0 14px;
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 999px;
+    font-size: 15px; cursor: pointer; text-decoration: none;
+  }
+  .ghost:active { background: var(--panel); }
+  .ghost.danger { color: var(--danger); }
+  .ghost svg { width: 18px; height: 18px; }
+
+  .primary {
+    width: 100%; max-width: 688px; min-height: 56px;
+    background: var(--accent); color: var(--ink);
+    border: 0; border-radius: 14px;
+    font-size: 18px; font-weight: 700; cursor: pointer;
+  }
+  .primary:active { transform: translateY(1px); }
+  .bottombar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    padding-top: 12px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: linear-gradient(to top, var(--ink) 70%, rgba(11, 11, 9, 0));
+    display: flex; justify-content: center;
+  }
+
+  /* ---------- Roteiros ---------- */
+  .list { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+  .item {
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px;
+    padding: 14px 4px; border: 0; border-bottom: 1px solid var(--line);
+    background: transparent; color: var(--fg); text-align: left; cursor: pointer; width: 100%;
+  }
+  .item:active { background: var(--panel); }
+  .item b { font-size: 17px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item span { grid-column: 1; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .item svg { grid-row: 1 / 3; grid-column: 2; width: 18px; height: 18px; color: var(--muted); }
+  .empty { color: var(--muted); padding: 24px 4px; line-height: 1.5; }
+  .offline-note { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+  /* ---------- Editor ---------- */
+  .block { display: flex; flex-direction: column; gap: 8px; }
+  .label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #title {
+    width: 100%; background: transparent; color: var(--fg);
+    border: 0; border-bottom: 1px solid var(--line);
+    font-size: 22px; font-weight: 700; padding: 8px 0;
+  }
+  #title::placeholder { color: var(--muted); }
+  textarea {
+    width: 100%;
+    min-height: 40vh;
+    resize: vertical;
+    background: var(--panel);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 18px;      /* >=16px so iOS doesn't zoom on focus */
+    line-height: 1.5;
+  }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+  #file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  .preview { background: var(--prompt-bg); border-radius: 10px; overflow: hidden; padding: 12px 0; border: 1px solid var(--line); }
+  .preview div {
+    color: var(--prompt); font-weight: 700; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 16px;
+  }
+
+  .settings { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+  .set {
+    display: grid; grid-template-columns: 1fr auto; align-items: center;
+    gap: 10px 12px; padding-block: 14px; border-bottom: 1px solid var(--line);
+  }
+  .set > label, .set > .lbl { font-size: 16px; }
+  .set output { font-size: 15px; color: var(--accent); font-variant-numeric: tabular-nums; min-width: 4.5em; text-align: right; }
+  .set input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); height: 28px; margin: 0; }
+  .set small { grid-column: 1 / -1; color: var(--muted); font-size: 13px; margin-top: -4px; line-height: 1.4; }
+
+  .swatches { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; }
+  .sw {
+    width: 40px; height: 40px; border-radius: 50%; cursor: pointer; padding: 0;
+    border: 2px solid var(--line); position: relative;
+  }
+  .sw[aria-pressed="true"] { border-color: var(--fg); box-shadow: 0 0 0 2px var(--ink) inset; }
+  .sw.custom { overflow: hidden; background: conic-gradient(#ff7b7b, #ffe27b, #7bff9a, #7bd5ff, #c57bff, #ff7b7b); }
+  .sw.custom input { position: absolute; inset: -8px; width: 60px; height: 60px; opacity: 0; cursor: pointer; }
+
+  .switch { position: relative; width: 52px; height: 32px; flex: none; }
+  .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background .15s; }
+  .switch span::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px;
+    border-radius: 50%; background: var(--fg); transition: transform .15s;
+  }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(20px); background: var(--ink); }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- Leitura ---------- */
+  #prompter { position: fixed; inset: 0; background: var(--prompt-bg); z-index: 20; overflow: hidden; }
+  #stage { position: absolute; inset: 0; touch-action: none; cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #flip { position: absolute; inset: 0; transform-origin: 50% 50%; }
+  #scroller { will-change: transform; }
+  #text {
+    color: var(--prompt); font-weight: 700; line-height: 1.32;
+    white-space: pre-wrap; overflow-wrap: break-word; margin: 0;
+  }
+  .marker { position: absolute; width: 0; height: 0; border-top: 12px solid transparent; border-bottom: 12px solid transparent; transform: translateY(-50%); opacity: .4; }
+  .marker.l { left: 0; border-left: 16px solid var(--prompt); }
+  .marker.r { right: 0; border-right: 16px solid var(--prompt); }
+  #progress { position: absolute; left: 0; top: 0; height: 3px; background: var(--prompt); opacity: .45; width: 0; }
+  #countdown {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--prompt); font-weight: 700; font-size: 34vmin; pointer-events: none;
+  }
+
+  #bar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding-top: 10px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    background: rgba(12, 12, 10, .9);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border-top: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 10px 14px; transition: opacity .25s;
+  }
+  #prompter.is-playing #bar { opacity: .22; }
+  .row { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
+  .group { display: flex; align-items: center; gap: 6px; }
+  .round {
+    width: 46px; height: 46px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    font-size: 24px; line-height: 1; cursor: pointer; padding: 0;
+  }
+  .round:active { background: var(--line); }
+  .round svg { width: 22px; height: 22px; }
+  .round.on { color: var(--accent); border-color: rgba(255, 246, 163, .4); }
+  #bPlay { width: 60px; height: 60px; background: var(--accent); color: var(--ink); border: 0; }
+  #bPlay svg { width: 28px; height: 28px; }
+  .stepper .val { display: flex; flex-direction: column; align-items: center; min-width: 64px; }
+  .stepper .val b { font-size: 18px; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .stepper .val i { font-style: normal; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<!-- Roteiros -->
+<main id="library" class="screen">
+  <header class="head">
+    <h1>Teleprompter <span>de Bolso</span></h1>
+  </header>
+  <div class="label-row">
+    <span class="eyebrow">Roteiros</span>
+    <span class="count" id="libCount"></span>
+  </div>
+  <div class="list" id="list"></div>
+  <p class="offline-note" id="offlineNote">Tudo fica salvo só neste aparelho e funciona sem internet.</p>
+  <div class="bottombar"><button class="primary" id="newScript" type="button">Novo roteiro</button></div>
+</main>
+
+<!-- Editor -->
+<main id="editor" class="screen" hidden>
+  <header class="head">
+    <button class="ghost" id="backToList" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      Roteiros
+    </button>
+    <button class="ghost danger" id="del" type="button">Apagar</button>
+  </header>
+
+  <section class="block">
+    <input id="title" type="text" placeholder="Nome do roteiro" autocomplete="off">
+    <div class="label-row">
+      <label class="eyebrow" for="script">Texto</label>
+      <span class="count" id="count">0 palavras</span>
+    </div>
+    <textarea id="script" spellcheck="false" placeholder="Cole ou digite o texto do vídeo aqui"></textarea>
+    <div class="tools">
+      <label class="ghost" for="file">Abrir arquivo .txt</label>
+      <input type="file" id="file" accept=".txt,text/plain">
+    </div>
+  </section>
+
+  <section class="block">
+    <span class="eyebrow">Prévia</span>
+    <div class="preview"><div id="preview"></div></div>
+  </section>
+
+  <section class="block">
+    <span class="eyebrow">Ajustes (valem para todos os roteiros)</span>
+    <div class="settings">
+      <div class="set">
+        <label for="size">Tamanho do texto</label>
+        <output id="sizeOut" for="size"></output>
+        <input type="range" id="size" min="24" max="160" step="2">
+      </div>
+      <div class="set">
+        <label for="speed">Velocidade</label>
+        <output id="speedOut" for="speed"></output>
+        <input type="range" id="speed" min="1" max="20" step="0.5">
+        <small>A velocidade acompanha o tamanho: mudar a letra não muda o ritmo de leitura.</small>
+      </div>
+      <div class="set">
+        <label for="margin">Margem nas laterais</label>
+        <output id="marginOut" for="margin"></output>
+        <input type="range" id="margin" min="0" max="30" step="1">
+      </div>
+      <div class="set">
+        <span class="lbl">Cor do texto</span>
+        <div class="swatches" id="textColors"></div>
+      </div>
+      <div class="set">
+        <span class="lbl">Cor do fundo</span>
+        <div class="swatches" id="bgColors"></div>
+      </div>
+      <div class="set">
+        <label for="mirrorX">Espelhar texto</label>
+        <span class="switch"><input type="checkbox" id="mirrorX"><span></span></span>
+        <small>Para usar com o vidro do teleprompter (o texto aparece certo no reflexo).</small>
+      </div>
+      <div class="set">
+        <label for="mirrorY">Inverter de cabeça para baixo</label>
+        <span class="switch"><input type="checkbox" id="mirrorY"><span></span></span>
+        <small>Só se o seu suporte deixar o celular de ponta-cabeça.</small>
+      </div>
+      <div class="set">
+        <label for="countdown">Contagem 3, 2, 1 antes de começar</label>
+        <span class="switch"><input type="checkbox" id="countdown"><span></span></span>
+      </div>
+    </div>
+  </section>
+
+  <div class="bottombar"><button class="primary" id="start" type="button">Iniciar leitura</button></div>
+</main>
+
+<!-- Leitura -->
+<section id="prompter" hidden>
+  <div id="stage" aria-label="Toque para pausar ou continuar. Arraste para mover o texto.">
+    <div id="flip">
+      <div id="scroller"><p id="text"></p></div>
+      <span class="marker l" id="mkL"></span>
+      <span class="marker r" id="mkR"></span>
+      <div id="countdown" hidden></div>
+    </div>
+    <div id="progress"></div>
+  </div>
+
+  <div id="bar">
+    <div class="row">
+      <div class="group stepper">
+        <button class="round" id="bSpdDn" type="button" aria-label="Diminuir velocidade">−</button>
+        <span class="val"><b id="spdVal"></b><i>Velocidade</i></span>
+        <button class="round" id="bSpdUp" type="button" aria-label="Aumentar velocidade">+</button>
+      </div>
+      <div class="group stepper">
+        <button class="round" id="bSizeDn" type="button" aria-label="Diminuir texto">−</button>
+        <span class="val"><b id="sizeVal"></b><i>Tamanho</i></span>
+        <button class="round" id="bSizeUp" type="button" aria-label="Aumentar texto">+</button>
+      </div>
+    </div>
+    <div class="row">
+      <button class="round" id="bExit" type="button" aria-label="Voltar para editar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <button class="round" id="bTop" type="button" aria-label="Voltar ao início do texto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+      </button>
+      <button class="round" id="bPlay" type="button" aria-label="Iniciar">
+        <svg id="icoPlay" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>
+        <svg id="icoPause" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="5.5" y="4" width="4.5" height="16" rx="1"/><rect x="14" y="4" width="4.5" height="16" rx="1"/></svg>
+      </button>
+      <button class="round" id="bMirror" type="button" aria-label="Espelhar texto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18" stroke-dasharray="2 2.5"/><path d="M9 7L4 17h5z"/><path d="M15 7l5 10h-5z"/></svg>
+      </button>
+      <button class="round" id="bBack" type="button" aria-label="Voltar um pouco o texto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>
+      </button>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+  const SAMPLE = `Olá! Este é o seu novo teleprompter.
+
+Cole aqui o roteiro do vídeo, ajuste o tamanho da letra e a velocidade, e toque em Iniciar leitura.
+
+Durante a gravação, toque na tela para pausar ou continuar. Arraste com o dedo para voltar ou adiantar o texto.
+
+Os botões de menos e mais mudam a velocidade e o tamanho a qualquer momento, sem parar a leitura.
+
+Ative o espelhamento quando o celular estiver no suporte com vidro, para o texto aparecer certo no reflexo.
+
+Boa gravação!`;
+
+  const TEXT_COLORS = ['#fff6a3', '#ffffff', '#ffe066', '#b8f5c0', '#a8e6ff'];
+  const BG_COLORS = ['#000000', '#1a1a1a', '#0d1b2a', '#ffffff'];
+  const DEFAULT_SETTINGS = { size: 48, speed: 6, margin: 6, mirrorX: true, mirrorY: false, countdown: true, color: '#fff6a3', bg: '#000000' };
+  const KEY = 'teleprompter:v2';
+  const READ_LINE = 0.3;           // reading line at 30% of the screen height
+  const SPEED_K = 0.12;            // px per second = speed * SPEED_K * fontSize
+
+  const $ = id => document.getElementById(id);
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const uid = () => Date.now().toString(36) + Math.floor(performance.now() * 1000).toString(36);
+  const fmt = n => (Math.round(n * 10) / 10).toString().replace('.', ',');
+  const wordCount = t => (t.trim() ? t.trim().split(/\s+/).length : 0);
+
+  /* ---------- Storage ---------- */
+  let D = (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (raw && Array.isArray(raw.scripts)) {
+        raw.settings = Object.assign({}, DEFAULT_SETTINGS, raw.settings || {});
+        return raw;
+      }
+    } catch (e) {}
+    return { settings: Object.assign({}, DEFAULT_SETTINGS), scripts: [{ id: uid(), title: 'Exemplo', text: SAMPLE, updated: Date.now() }] };
+  })();
+  const S = D.settings;
+  let saveTimer = 0;
+  const save = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(D)); } catch (e) {} }, 250);
+  };
+  const flush = () => { clearTimeout(saveTimer); try { localStorage.setItem(KEY, JSON.stringify(D)); } catch (e) {} };
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+
+  function applyColors() {
+    document.documentElement.style.setProperty('--prompt', S.color);
+    document.documentElement.style.setProperty('--prompt-bg', S.bg);
+  }
+
+  /* ---------- Screens ---------- */
+  const library = $('library'), editor = $('editor'), prompter = $('prompter');
+  let current = null;
+  function show(el) {
+    for (const s of [library, editor, prompter]) s.hidden = s !== el;
+    window.scrollTo(0, 0);
+  }
+
+  /* ---------- Roteiros ---------- */
+  const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' });
+  const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>';
+  function renderList() {
+    const list = $('list');
+    list.textContent = '';
+    const items = D.scripts.slice().sort((a, b) => b.updated - a.updated);
+    $('libCount').textContent = items.length + (items.length === 1 ? ' roteiro' : ' roteiros');
+    if (!items.length) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = 'Nenhum roteiro ainda. Toque em Novo roteiro e cole o seu texto.';
+      list.append(p);
+      return;
+    }
+    for (const sc of items) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'item';
+      const t = document.createElement('b');
+      t.textContent = sc.title.trim() || firstLine(sc.text) || 'Sem nome';
+      const m = document.createElement('span');
+      const w = wordCount(sc.text);
+      m.textContent = `${w} ${w === 1 ? 'palavra' : 'palavras'} · ${dateFmt.format(sc.updated)}`;
+      b.append(t, m);
+      b.insertAdjacentHTML('beforeend', chevron);
+      b.addEventListener('click', () => openEditor(sc));
+      list.append(b);
+    }
+  }
+  const firstLine = t => (t.split('\n').find(l => l.trim()) || '').trim().slice(0, 60);
+
+  $('newScript').addEventListener('click', () => {
+    const sc = { id: uid(), title: '', text: '', updated: Date.now() };
+    D.scripts.push(sc); save();
+    openEditor(sc);
+    $('script').focus();
+  });
+
+  /* ---------- Editor ---------- */
+  const titleIn = $('title'), script = $('script'), size = $('size'), speed = $('speed'), margin = $('margin');
+  const mirrorX = $('mirrorX'), mirrorY = $('mirrorY'), countdownOpt = $('countdown');
+
+  function openEditor(sc) {
+    current = sc;
+    titleIn.value = sc.title;
+    script.value = sc.text;
+    syncSettings();
+    show(editor);
+  }
+  function syncSettings() {
+    size.value = S.size; speed.value = S.speed; margin.value = S.margin;
+    mirrorX.checked = S.mirrorX; mirrorY.checked = S.mirrorY; countdownOpt.checked = S.countdown;
+    renderSwatches();
+    refreshEditor();
+  }
+  function refreshEditor() {
+    $('sizeOut').textContent = S.size + ' px';
+    $('speedOut').textContent = fmt(S.speed);
+    $('marginOut').textContent = S.margin + '%';
+    const w = wordCount(script.value);
+    $('count').textContent = w + (w === 1 ? ' palavra' : ' palavras');
+    const pv = $('preview');
+    pv.textContent = firstLine(script.value) || 'Seu texto aparece assim';
+    pv.style.fontSize = Math.min(S.size, 72) + 'px';
+    pv.style.transform = `scale(${S.mirrorX ? -1 : 1}, ${S.mirrorY ? -1 : 1})`;
+    applyColors();
+  }
+  function swatchRow(el, colors, key) {
+    el.textContent = '';
+    const val = S[key].toLowerCase();
+    let matched = false;
+    for (const c of colors) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'sw'; b.style.background = c;
+      b.setAttribute('aria-label', 'Cor ' + c);
+      const on = c === val; matched = matched || on;
+      b.setAttribute('aria-pressed', on);
+      b.addEventListener('click', () => { S[key] = c; save(); renderSwatches(); refreshEditor(); });
+      el.append(b);
+    }
+    const wrap = document.createElement('label');
+    wrap.className = 'sw custom';
+    wrap.setAttribute('aria-pressed', !matched);
+    wrap.title = 'Outra cor';
+    if (!matched) wrap.style.background = val;
+    const inp = document.createElement('input');
+    inp.type = 'color'; inp.value = val; inp.setAttribute('aria-label', 'Escolher outra cor');
+    inp.addEventListener('input', () => { S[key] = inp.value; save(); refreshEditor(); wrap.style.background = inp.value; });
+    inp.addEventListener('change', () => renderSwatches());
+    wrap.append(inp);
+    el.append(wrap);
+  }
+  function renderSwatches() {
+    swatchRow($('textColors'), TEXT_COLORS, 'color');
+    swatchRow($('bgColors'), BG_COLORS, 'bg');
+  }
+
+  const touch = () => { if (current) { current.updated = Date.now(); save(); } };
+  titleIn.addEventListener('input', () => { current.title = titleIn.value; touch(); });
+  script.addEventListener('input', () => { current.text = script.value; refreshEditor(); touch(); });
+  size.addEventListener('input', () => { S.size = +size.value; refreshEditor(); save(); });
+  speed.addEventListener('input', () => { S.speed = +speed.value; refreshEditor(); save(); });
+  margin.addEventListener('input', () => { S.margin = +margin.value; refreshEditor(); save(); });
+  mirrorX.addEventListener('change', () => { S.mirrorX = mirrorX.checked; refreshEditor(); save(); });
+  mirrorY.addEventListener('change', () => { S.mirrorY = mirrorY.checked; refreshEditor(); save(); });
+  countdownOpt.addEventListener('change', () => { S.countdown = countdownOpt.checked; save(); });
+
+  $('file').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      current.text = String(r.result || '');
+      if (!current.title.trim()) current.title = f.name.replace(/\.[^.]+$/, '');
+      titleIn.value = current.title; script.value = current.text;
+      refreshEditor(); touch();
+    };
+    r.readAsText(f);
+    e.target.value = '';
+  });
+
+  function leaveEditor() {
+    // An untouched new script is not worth keeping.
+    if (current && !current.text.trim() && !current.title.trim()) {
+      D.scripts = D.scripts.filter(s => s !== current); save();
+    }
+    current = null;
+    renderList();
+    show(library);
+  }
+  $('backToList').addEventListener('click', leaveEditor);
+
+  const delBtn = $('del');
+  let delArmed = 0;
+  const disarm = () => { clearTimeout(delArmed); delArmed = 0; delBtn.textContent = 'Apagar'; };
+  delBtn.addEventListener('click', () => {
+    if (!delArmed) {
+      delBtn.textContent = 'Toque de novo para apagar';
+      delArmed = setTimeout(disarm, 2500);
+      return;
+    }
+    disarm();
+    D.scripts = D.scripts.filter(s => s !== current); save();
+    current = null; renderList(); show(library);
+  });
+
+  /* ---------- Leitura ---------- */
+  const stage = $('stage'), flip = $('flip'), scroller = $('scroller'), textEl = $('text'), cd = $('countdown'), prog = $('progress');
+  let pos = 0, maxPos = 0, stageH = 0, playing = false, last = 0, raf = 0, drag = null, cdTimer = 0;
+
+  function layout() {
+    const ratio = maxPos ? pos / maxPos : 0;
+    stageH = prompter.clientHeight;
+    textEl.style.fontSize = S.size + 'px';
+    textEl.style.paddingLeft = `calc(${S.margin}% + max(20px, env(safe-area-inset-left, 0px)))`;
+    textEl.style.paddingRight = `calc(${S.margin}% + max(20px, env(safe-area-inset-right, 0px)))`;
+    flip.style.transform = `scale(${S.mirrorX ? -1 : 1}, ${S.mirrorY ? -1 : 1})`;
+    const lineY = Math.round(stageH * READ_LINE);
+    scroller.style.paddingTop = lineY + 'px';
+    scroller.style.paddingBottom = stageH + 'px';
+    $('mkL').style.top = $('mkR').style.top = (lineY + S.size * 0.66) + 'px';
+    maxPos = Math.max(0, textEl.offsetHeight - S.size * 1.32);
+    pos = clamp(ratio * maxPos, 0, maxPos);
+    draw();
+    $('spdVal').textContent = fmt(S.speed);
+    $('sizeVal').textContent = S.size;
+    $('bMirror').classList.toggle('on', S.mirrorX);
+  }
+  const draw = () => {
+    scroller.style.transform = `translate3d(0, ${-pos}px, 0)`;
+    prog.style.width = (maxPos ? (pos / maxPos) * 100 : 0) + '%';
+  };
+
+  function tick(t) {
+    if (!playing) return;
+    const dt = Math.min(0.1, (t - last) / 1000);
+    last = t;
+    if (!(drag && drag.moved)) pos += S.speed * SPEED_K * S.size * dt;
+    if (pos >= maxPos) { pos = maxPos; draw(); setPlaying(false); return; }
+    draw();
+    raf = requestAnimationFrame(tick);
+  }
+  function setPlaying(p) {
+    playing = p;
+    prompter.classList.toggle('is-playing', p);
+    $('icoPlay').hidden = p; $('icoPause').hidden = !p;
+    $('bPlay').setAttribute('aria-label', p ? 'Pausar' : 'Iniciar');
+    cancelAnimationFrame(raf);
+    if (p) { last = performance.now(); raf = requestAnimationFrame(tick); }
+  }
+  function stopCountdown() { clearTimeout(cdTimer); cdTimer = 0; cd.hidden = true; }
+  function play() {
+    if (pos >= maxPos) pos = 0;
+    if (S.countdown && pos === 0) {
+      let n = 3;
+      cd.hidden = false; cd.textContent = n;
+      prompter.classList.add('is-playing');
+      const step = () => {
+        n -= 1;
+        if (n === 0) { stopCountdown(); setPlaying(true); return; }
+        cd.textContent = n; cdTimer = setTimeout(step, 1000);
+      };
+      cdTimer = setTimeout(step, 1000);
+    } else setPlaying(true);
+  }
+  function toggle() {
+    if (cdTimer) { stopCountdown(); setPlaying(false); return; }
+    playing ? setPlaying(false) : play();
+  }
+
+  // Keep the screen on while reading.
+  let lock = null;
+  async function wake(on) {
+    try {
+      if (on && 'wakeLock' in navigator && !lock) {
+        lock = await navigator.wakeLock.request('screen');
+        lock.addEventListener('release', () => { lock = null; });
+      } else if (!on && lock) { await lock.release(); lock = null; }
+    } catch (e) { lock = null; }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !prompter.hidden) wake(true);
+  });
+
+  function openPrompter() {
+    textEl.textContent = current.text.trim() ? current.text : 'Escreva o roteiro antes de iniciar.';
+    applyColors();
+    show(prompter);
+    pos = 0; maxPos = 0;
+    layout();
+    wake(true);
+    play();
+  }
+  function closePrompter() {
+    stopCountdown(); setPlaying(false); wake(false);
+    syncSettings();
+    show(editor);
+  }
+
+  const setSpeed = v => { S.speed = clamp(Math.round(v * 2) / 2, 1, 20); $('spdVal').textContent = fmt(S.speed); save(); };
+  const setSize = v => { S.size = clamp(v, 24, 160); layout(); save(); };
+  const nudge = d => { pos = clamp(pos + d, 0, maxPos); draw(); };
+
+  $('start').addEventListener('click', openPrompter);
+  $('bPlay').addEventListener('click', toggle);
+  $('bExit').addEventListener('click', closePrompter);
+  $('bTop').addEventListener('click', () => { stopCountdown(); setPlaying(false); pos = 0; draw(); });
+  $('bBack').addEventListener('click', () => nudge(-stageH * 0.25));
+  $('bMirror').addEventListener('click', () => { S.mirrorX = !S.mirrorX; layout(); save(); });
+  $('bSpdDn').addEventListener('click', () => setSpeed(S.speed - 0.5));
+  $('bSpdUp').addEventListener('click', () => setSpeed(S.speed + 0.5));
+  $('bSizeDn').addEventListener('click', () => setSize(S.size - 4));
+  $('bSizeUp').addEventListener('click', () => setSize(S.size + 4));
+
+  // Tap = pause/continue, drag = move text (direction follows the upside-down option).
+  stage.addEventListener('pointerdown', e => {
+    drag = { id: e.pointerId, y: e.clientY, pos, moved: false };
+    try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!drag || drag.id !== e.pointerId) return;
+    const dy = e.clientY - drag.y;
+    if (Math.abs(dy) > 8) drag.moved = true;
+    if (drag.moved) { pos = clamp(drag.pos - dy * (S.mirrorY ? -1 : 1), 0, maxPos); draw(); }
+  });
+  const endDrag = e => {
+    if (!drag || drag.id !== e.pointerId) return;
+    const tapped = !drag.moved && e.type === 'pointerup';
+    drag = null;
+    if (tapped) toggle();
+  };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+  stage.addEventListener('wheel', e => { e.preventDefault(); nudge(e.deltaY); }, { passive: false });
+
+  // Bluetooth remotes and keyboards: space = play/pause, arrows = speed, page keys = move text.
+  document.addEventListener('keydown', e => {
+    if (prompter.hidden) return;
+    const k = e.key;
+    if (k === ' ' || k === 'Enter') { e.preventDefault(); toggle(); }
+    else if (k === 'ArrowUp' || k === 'ArrowRight') { e.preventDefault(); setSpeed(S.speed + 0.5); }
+    else if (k === 'ArrowDown' || k === 'ArrowLeft') { e.preventDefault(); setSpeed(S.speed - 0.5); }
+    else if (k === 'PageUp') { e.preventDefault(); nudge(-stageH * 0.25); }
+    else if (k === 'PageDown') { e.preventDefault(); nudge(stageH * 0.25); }
+    else if (k === 'Escape') closePrompter();
+  });
+
+  window.addEventListener('resize', () => { if (!prompter.hidden) layout(); });
+
+  applyColors();
+  renderList();
+  show(library);
+
+  // Offline: cache the app on first visit.
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
